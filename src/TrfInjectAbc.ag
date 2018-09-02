@@ -1,0 +1,60 @@
+MODULE {TrfInjectAbc} {injectAbc} {}
+
+INCLUDE "ByteCodeAst.ag"
+
+imports
+{
+import Data.ByteString.Lazy(ByteString,pack)
+import ByteCode
+import Data.Word
+import qualified Data.Set as Set
+import Data.Set(Set)
+import qualified Data.Map as Map
+import Data.Map(Map)
+import Codec.Binary.UTF8.String
+}
+
+
+WRAPPER SwfFile 
+
+{
+-- | Injects the given .abc code after the last .abc block in the flash file.
+--   If you want to inject multiple chunks of .abc code, subjected
+--   to a partial order: convert it in a total order and inject
+--   in that order.
+injectAbc :: String -> AbcFile -> SwfFile -> SwfFile
+injectAbc name code file = out where
+  inh = Inh_SwfFile { abc_Inh_SwfFile = code, name_Inh_SwfFile = name }
+  sem = sem_SwfFile file
+  syn = wrap_SwfFile sem inh
+  out = output_Syn_SwfFile syn
+}
+
+
+ATTR AllSwf [ | | output : SELF ]
+
+
+ATTR SwfFile Tags [ abc : AbcFile  name : String | | ]
+ATTR Tags [ tag : Tag | | isLast : Bool ]
+ATTR Tag [ | isLast : Bool | isAbc : Bool ]
+
+SEM SwfFile | File
+  tags.tag = Tag_Abc [] (pack $ encode @lhs.name) @lhs.abc
+
+-- Backward propagate last tag info
+SEM Tags
+  | Nil   lhs.isLast = True
+  | Cons  hd.isLast  = @tl.isLast
+          lhs.isLast = @hd.isLast
+
+SEM Tag | Abc
+  lhs.isLast = False
+
+SEM Tag
+  | * - Abc  lhs.isAbc = False
+  | Abc      lhs.isAbc = True
+
+SEM Tags | Cons
+  lhs.output = if @hd.isAbc && @tl.isLast
+               then @hd.output : @lhs.tag : @tl.output
+               else @loc.output

@@ -1,0 +1,31 @@
+SEM BodyInfo | Info
+  instructions.location    = 0
+  instructions.revLocation = 0
+
+-- Thread location information through the AST
+ATTR Instructions Instruction CaseOffsets [ | location : Int | ]
+SEM Instruction | Location  lhs.location = @index
+
+-- Thread location information backward through the AST
+ATTR Instructions Instruction CaseOffsets [ | revLocation : Int | ]
+SEM Instruction | Location  lhs.revLocation = @index
+SEM Instructions | Cons
+  tl.revLocation  = @lhs.revLocation
+  hd.revLocation  = @tl.revLocation
+  lhs.revLocation = @hd.revLocation
+
+SEM BodyInfo | Info
+  instructions.location < instructions.revLocation
+
+-- Branch targets
+SEM Instruction
+  | LookupSwitch
+      loc.relative = fromS24 @defaultOffset
+      loc.target = @lhs.location + @loc.relative
+  | IfEq IfFalse IfGe IfGt IfLe IfLt IfNGe IfNGt IfNLe IfNLt IfNe IfStrictEq IfStrictNe IfTrue Jump
+      loc.relative = fromS24 @offset
+      loc.target = @lhs.revLocation + @loc.relative
+
+SEM CaseOffsets | Cons
+  loc.relative = fromS24 @hd
+  loc.target = @lhs.location + @loc.relative

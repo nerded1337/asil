@@ -1,0 +1,14 @@
+--
+-- Generic byte code transformation code.
+--
+--
+-- The idea is to provide an interface at each constructor of interest of
+-- ByteCode to add and obtain new strings, namespaces, methods, classes, etc.
+--
+
+-- Design issue: is the information that we wish to add already accesible
+-- by other nodes?
+
+-- addString
+-- addNamespace
+--

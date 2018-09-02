@@ -1,0 +1,47 @@
+name:                asil
+version:             0.1.0.0
+github:              "jac3km4/asil"
+license:             LGPL
+maintainer:          "jac3km4@gmail.com"
+copyright:           "Universiteit Utrecht, FITTEST project"
+synopsis:            Action Script Instrumentation Library
+category:            Compilers/Interpreters
+# To avoid duplicated efforts in documentation and dealing with the
+# complications of embedding Haddock markup inside cabal files, it is
+# common to point users to the README.md file.
+description:         A library for the analysis and instrumentation of ActionScript programs in Flash files.
+
+extra-source-files:
+- README.md
+- ChangeLog.md
+
+dependencies:
+- base >= 4.7 && < 5
+- bytestring >= 0.9
+- filepath >= 1.1
+- directory >= 1.0
+- utf8-string >= 0.3
+- array >= 0.3
+- mtl >= 1.1.0.2
+- data-binary-ieee754 >= 0.4.2
+- binary >= 0.5.0.2
+- zlib >= 0.5.2.0
+- pretty >= 1.0.1.1
+- containers >= 0.3
+- uuagc >= 0.9.36
+- haskell-src-exts >= 1.10.1
+- zip-archive >= 0.1.1.7
+
+library:
+  source-dirs: src
+
+tests:
+  asil-test:
+    main:                Spec.hs
+    source-dirs:         test
+    ghc-options:
+    - -threaded
+    - -rtsopts
+    - -with-rtsopts=-N
+    dependencies:
+    - asil

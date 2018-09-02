@@ -1,0 +1,694 @@
+MODULE {PrettyTree} {ppSwf,ppAbc} {}
+
+INCLUDE "ByteCodeAst.ag"
+INCLUDE "SymViewAst.ag"
+INCLUDE "ByteCodeLocationInfo.ag"
+
+imports
+{
+import Codec.Binary.UTF8.String
+import Data.ByteString.Lazy(ByteString,unpack)
+import Data.Word
+import Data.Monoid
+import ByteCode
+import PrettyUtil
+import Options
+import SymView
+import ProgInfo
+}
+
+WRAPPER SwfFile
+WRAPPER AbcFile
+
+{
+ppSwf :: Options -> [SymbolTables] -> SwfFile -> Doc
+ppSwf opts tbls m = out where
+  inh = Inh_SwfFile { opts_Inh_SwfFile = opts, tbls_Inh_SwfFile = tbls }
+  sem = sem_SwfFile m
+  syn = wrap_SwfFile sem inh
+  out = output_Syn_SwfFile syn
+
+ppAbc :: Options -> [SymbolTables] -> AbcFile -> Doc
+ppAbc opts tbls m = out where
+  inh = Inh_AbcFile { opts_Inh_AbcFile = opts, tbls_Inh_AbcFile = tbls }
+  sem = sem_AbcFile m
+  syn = wrap_AbcFile sem inh
+  out = output_Syn_AbcFile syn
+}
+
+ATTR (AllSwf - TagKind AbcFlags AbcFlag NamespaceInfo MultinameInfo ParamNames NamespaceKind)
+  [ opts : Options | | output USE {$+$} {empty} : Doc ]
+
+SEM SwfFile | File
+  lhs.output = text "SWF" <+> space <+> props
+                 [ ("compressed", bool @compressed)
+                 , ("version",    num @version)
+                 , ("length",     num @length)
+                 ]
+               $+$ @tags.output
+
+ATTR OnlySwfAbc [ | tbls : {[SymbolTables]} | ]
+ATTR AllAbc [ tbls : SymbolTables | | ]
+
+-- Associate a symbol table with the right abcfile in a SWF file
+SEM AbcFile | File
+  loc.tbls = head @lhs.tbls
+  lhs.tbls = tail @lhs.tbls
+
+{
+bool :: Bool -> Doc
+bool True  = text "yes"
+bool False = text "no"
+
+num :: (Num a, Show a) => a -> Doc
+num x = text (show x)
+
+str :: ByteString -> Doc
+str = text . decode . unpack
+
+props :: [(String, Doc)] -> Doc
+props xs = hsep $ punctuate (text ",") [ (text k <> text ":") <+> v | (k,v) <- xs ]
+}
+
+SEM Tag
+  | Abc
+      lhs.output = text "TAG Abc" <+> space <+> props
+                     [ ("lazy init", bool @flags.doLazyInit)
+                     , ("name",      str @name)
+                     ]
+                   $+$ @file.output
+  | FileAttributes
+      lhs.output = text "TAG FileAttributes" <+> space <+> props
+                     [ ("use blit",    bool @useDirectBlit)
+                     , ("use gpu",     bool @useGPU)
+                     , ("hasAS3",      bool @hasAS3)
+                     , ("use network", bool @useNetwork)
+                     ]
+  | Opaque
+      lhs.output = text "TAG" <+> text (show @kind.self) <+> space <+> props
+                     [ ("length", num @length)
+                     ]
+
+ATTR TagKind [ | | self : SELF ]
+
+ATTR AbcFlags AbcFlag [ | | doLazyInit USE {||} {False} : Bool ]
+SEM AbcFlag | LazyInit  lhs.doLazyInit = True
+
+
+SEM AbcFile | File
+  lhs.output = text "ABC" <+> space <+> props
+                 [ ("major version", num @majorVersion)
+                 , ("minor version", num @minorVersion)
+                 , ("classes", num @classes.length)
+                 , ("methods", num @bodies.length)
+                 ]
+               $+$ @constantPool.output
+               $+$ @classes.output
+               $+$ @instances.output
+               $+$ @bodies.output
+
+ATTR BodyInfos ClassInfos BodyInfo ClassInfo [ | | length USE {+} {0} : Int ]
+
+SEM ClassInfo | Info  lhs.length = 1
+SEM BodyInfo  | Info  lhs.length = 1
+
+
+--
+-- Pretty-print constant pool
+--
+
+SEM PoolInfo | Info
+  lhs.output = vert $ map (\(k,v) -> text "TABLE" <+> text k $+$ nest 2 v)
+                 [ ("integers",   @integers.output)
+                 , ("uintegers",  @uintegers.output)
+                 , ("doubles",    @doubles.output)
+                 , ("strings",    @strings.output)
+                 , ("namespaces", @namespaces.output)
+                 , ("namesets",   @namesets.output)
+                 , ("multinames", @multinames.output)
+                 ]
+
+ATTR PoolInts PoolUInts PoolDoubles PoolStrings NamespaceInfos SetInfos MultinameInfos [ index : Word32 | | ]
+SEM PoolInfo | Info
+  integers.index   = 1
+  uintegers.index  = 1
+  doubles.index    = 1
+  strings.index    = 1
+  namespaces.index = 1
+  namesets.index   = 1
+  multinames.index = 1
+
+SEM PoolInts       | Cons  tl.index = 1 + @lhs.index
+SEM PoolUInts      | Cons  tl.index = 1 + @lhs.index
+SEM PoolDoubles    | Cons  tl.index = 1 + @lhs.index
+SEM PoolStrings    | Cons  tl.index = 1 + @lhs.index
+SEM NamespaceInfos | Cons  tl.index = 1 + @lhs.index
+SEM SetInfos       | Cons  tl.index = 1 + @lhs.index
+SEM MultinameInfos | Cons  tl.index = 1 + @lhs.index
+
+SEM PoolInts       | Cons  lhs.output = num @lhs.index <+> text "->" <+> num @hd $+$ @tl.output
+SEM PoolUInts      | Cons  lhs.output = num @lhs.index <+> text "->" <+> num @hd $+$ @tl.output
+SEM PoolDoubles    | Cons  lhs.output = num @lhs.index <+> text "->" <+> num @hd $+$ @tl.output
+SEM PoolStrings    | Cons  lhs.output = num @lhs.index <+> text "->" <+> str @hd $+$ @tl.output
+SEM NamespaceInfos | Cons  lhs.output = num @lhs.index <+> text "->" <+> @pp.output $+$ @tl.output
+SEM SetInfos       | Cons  lhs.output = num @lhs.index <+> text "->" <+> @hd.output $+$ @tl.output
+SEM MultinameInfos | Cons  lhs.output = num @lhs.index <+> text "->" <+> @pp.output $+$ @tl.output
+
+SEM NamespaceInfos | Cons
+  inst.pp : NsV
+  inst.pp = namespaceView @lhs.tbls (Ref @lhs.index)
+  pp.info = Verbose
+
+SEM MultinameInfos | Cons
+  inst.pp : NmV
+  inst.pp = nameView @lhs.tbls (Ref @lhs.index)
+  pp.info = Verbose
+
+SEM SetInfo | Info
+  lhs.output = text "SET" <+> @names.output
+
+SEM NamespaceNames | Cons
+  lhs.output = @pp.output <+> braces (text "ns-id:" <+> num @hd) <+> @tl.output
+  inst.pp : NsV
+  inst.pp = namespaceView @lhs.tbls (Ref @hd)
+  pp.info = Short
+
+
+--
+-- Pretty-printing of view on symbol table
+--
+
+{
+data PPInfo = Short | Verbose
+}
+
+ATTR StrV MbStrV MbNmV NmV NsV [ | | isEmpty : Bool ]
+SEM StrV | Str        lhs.isEmpty = null @val
+SEM MbStrV | Nothing  lhs.isEmpty = True
+SEM MbNmV  | Nothing  lhs.isEmpty = True
+SEM NmV    | Other    lhs.isEmpty = False
+SEM NmV    | Qual     lhs.isEmpty = @nm.isEmpty
+SEM NmV    | Quals    lhs.isEmpty = False
+SEM NsV    | Ns       lhs.isEmpty = @nm.isEmpty
+
+ATTR FileV TablesV TableV ClassesV
+     ClassV MbSuperV SuperV ItfsV ItfV TraitsV TraitV
+     NmV NmsV NsSetV NssV NsV StrV MbStrV MbNmV MethodsV MethodV SigV ParamV TypeV
+  [ info : PPInfo | | output USE {$+$} {empty} : Doc ]
+
+ATTR ParamsV [ info : PPInfo | | output USE {++} {[]} : {[Doc]} ]
+
+SEM NmV
+  | Qual   loc.nmOut  = if @nm.isEmpty
+                        then text "*"
+                        else @nm.output
+           lhs.output = case @lhs.info of
+                          Short   -> if @ns.isEmpty
+                                     then @loc.nmOut
+                                     else @ns.output <> text ":" <> @loc.nmOut
+                          Verbose -> props [ ("namespace", @ns.output), ("name", @nm.output) ]
+  | Quals  lhs.output = @set.output <> text ":" <> @nm.output
+           loc.info   = Short
+  | Other  lhs.output = text "name/other" <> parens (text $ show $ refVal @id)
+
+SEM NsV | Ns
+  lhs.output = if (refVal @id) == 0
+               then text "*"
+               else case @lhs.info of
+                      Short   -> @nm.output
+                      Verbose -> @nm.output <+> braces (text "ns-id:" <+> num (refVal @id))
+
+SEM NsSetV | Set
+  lhs.output = braces @spaces.output
+
+SEM NssV
+  | Cons  lhs.output = @hd.output <+> @tl.output
+  | Nil   lhs.output = empty
+
+SEM StrV | Str
+  lhs.output = case @lhs.info of
+                 Short   -> text @val
+                 Verbose -> text @val <+> braces (text "str-id:" <+> num (refVal @id))
+
+SEM MbStrV | Nothing
+  lhs.output = text "_"
+
+SEM MbNmV | Nothing
+  lhs.output = text "_"
+
+SEM MethodV | Method
+  mbNm.info  = Short
+  sig.info   = Short
+  lhs.output = if @mbNm.isDefined
+               then @mbNm.output <> @sig.output
+               else @sig.output
+
+ATTR MbNmV [ | | isDefined : Bool ]
+SEM MbNmV
+  | Just     lhs.isDefined = True
+  | Nothing  lhs.isDefined = False
+
+ATTR MbStrV [ | | isDefined : Bool ]
+SEM MbStrV
+  | Just     lhs.isDefined = True
+  | Nothing  lhs.isDefined = False
+
+SEM SigV | Sig
+  params.info = Short
+  ret.info    = Short
+  lhs.output  = parens (hsep $ punctuate (text ",") @params.output) <> text ":" <> @ret.output
+
+SEM ParamsV
+  | Cons lhs.output = @hd.output : @tl.output
+  | Nil  lhs.output = []
+
+SEM ParamV | Param
+  lhs.output = @tp.output
+
+SEM ClassV | Class
+  lhs.output = @nm.output
+
+
+--
+-- Pretty print instance information
+--   (the dynamic aspects of a class/type)
+--
+
+ATTR ClassInfos ClassInfo InstanceInfos InstanceInfo [ index : Word32 | | ]
+
+SEM AbcFile | File
+  instances.index = 0
+  classes.index   = 0
+
+SEM ClassInfos | Cons     tl.index = 1 + @lhs.index
+SEM InstanceInfos | Cons  tl.index = 1 + @lhs.index
+
+SEM InstanceInfo | Info
+  inst.nm : NmV
+  inst.nm = nameView @lhs.tbls (Ref @name)
+  nm.info = Short
+
+  inst.s : NmV
+  inst.s = nameView @lhs.tbls (Ref @super)
+  s.info = Short
+
+  inst.con : MethodV
+  inst.con = methodView @lhs.tbls (Ref @constructor)
+  con.info = Short
+
+  inst.ns : NsV
+  inst.ns = namespaceView @lhs.tbls (Ref @protectedNs)
+  ns.info = Verbose
+
+  lhs.output = text "INSTANCE" <+> @nm.output
+               $+$ nest 2 (   text "SUPER" <+> @s.output
+                          $+$ @interfaces.output
+                          $+$ @flags.output
+                          $+$ text "CON" <+> @con.output
+                          $+$ text "NS" <+> @ns.output
+                          $+$ @traits.output
+                          )
+
+SEM InstanceFlag
+  | ClassSealed     lhs.output = text "FLAG sealed"
+  | ClassFinal      lhs.output = text "FLAG final"
+  | ClassInterface  lhs.output = text "FLAG is interface"
+  | ClassProtected  lhs.output = text "FLAG has protected namespace"
+
+
+--
+-- Pretty print traits
+--
+
+SEM Trait | Trait
+  inst.nm : NmV
+  inst.nm = nameView @lhs.tbls (Ref @name)
+  nm.info = Short
+
+  lhs.output = text "TRAIT" <+> @nm.output <+> parens (text $ show @name) <+>
+                   space <+> @attrs.output
+               $+$ nest 2 @data.output
+
+SEM TraitAttrs | Cons  lhs.output = @hd.output <+> @tl.output
+SEM TraitAttr
+  | Final     lhs.output = text "final"
+  | Override  lhs.output = text "override"
+  | Metadata  lhs.output = text "metadata"
+
+SEM TraitData
+  | Slot      loc.desc = text "SLOT"
+  | Const     loc.desc = text "CONST"
+  | Method    loc.desc = text "METHOD"
+  | Getter    loc.desc = text "GETTER"
+  | Setter    loc.desc = text "SETTER"
+  | Function  loc.desc = text "FUN"
+
+  | Slot Const
+      inst.nm : NmV
+      inst.nm = nameView @lhs.tbls (Ref @tp)
+      nm.info = Short
+
+      lhs.output = @loc.desc <+> props
+                     [ ("slotid", num @slotId)
+                     , ("type",   @nm.output)
+                     , ("vindex", num @vindex)
+                     , ("vkind",  @vkind.output)
+                     ]
+  | Method Getter Setter Function
+      inst.m : MethodV
+      inst.m = methodView @lhs.tbls (Ref @method)
+      m.info = Short
+
+      lhs.output = @loc.desc <+> props
+                     [ ("disp-id", num @dispId)
+                     , ("method",  @m.output)
+                     ]
+  | Class
+      loc.key   = Ref @class
+      loc.descr = lookupClass @loc.key @lhs.tbls
+
+      inst.nm : NmV
+      inst.nm = nameView @lhs.tbls (clName @loc.descr)
+      nm.info = Short
+
+      lhs.output = text "CLASS" <+> @nm.output
+
+
+--
+-- Pretty print class information
+--   (the constructor + static traits)
+--
+
+SEM ClassInfo | Info
+  loc.key   = Ref @lhs.index
+  loc.descr = lookupClass @loc.key @lhs.tbls
+
+  inst.nm : NmV
+  inst.nm = nameView @lhs.tbls (clName @loc.descr)
+  nm.info = Short
+
+  inst.m : MethodV
+  inst.m = methodView @lhs.tbls (Ref @con)
+  m.info = Short
+
+  lhs.output = text "CLASS" <+> @nm.output
+               $+$ nest 2 (text "CON" <+> @m.output)
+               $+$ nest 2 @traits.output
+
+
+--
+-- Pretty print method bodies
+--
+
+SEM BodyInfo | Info
+  inst.m : MethodV
+  inst.m = methodView @lhs.tbls (Ref @method)
+  m.info = Short
+
+  lhs.output = text "METHOD" <+> @m.output <+> space <+> props
+                 [ ("max stack",   num @maxStack)
+                 , ("locals",      num @localCount)
+                 , ("init scopes", num @initScopeDepth)
+                 , ("max scopes",  num @maxScopeDepth)
+                 ]
+               $+$ nest 2 @instructions.output
+               $+$ nest 2 @exceptions.output
+
+SEM Exception | Info
+  inst.nm : NmV
+  inst.nm = nameView @lhs.tbls (Ref @tp)
+  nm.info = Short
+
+  lhs.output = text "EXCEPTION" <+> @nm.output <+> space <+> props
+                 [ ("from",   num @from)
+                 , ("to",     num @to)
+                 , ("target", num @target)
+                 ]
+
+
+--
+-- Instructions and location information
+--
+
+ATTR Instructions Instruction [ | mbLoc : {Maybe Int} | ]
+
+SEM BodyInfo | Info
+  instructions.mbLoc = Nothing
+
+SEM Instruction
+  | * - Location
+      lhs.mbLoc  = Nothing
+
+      loc.lbl = case @lhs.mbLoc of
+                  Nothing -> text (replicate 8 ' ')
+                  Just i  -> let str = show i
+                                 sps = replicate (max 0 (6 - length str))  ' '
+                             in  text str <> text sps <> text ": "
+      loc.prefix = @loc.lbl <> text "INSTR"
+      lhs.output = @loc.prefix <+> @loc.descr
+  | Location
+      lhs.mbLoc  = Just @index
+      lhs.output = empty  -- hide
+
+-- Exception environment
+ATTR Exceptions Exception [ index : Word32 | | gathExcptEnv USE {`mappend`} {mempty} : ExceptionDescrs ]
+SEM BodyInfo | Info    exceptions.index = 0
+SEM Exceptions | Cons  tl.index = 1 + @lhs.index
+
+SEM Exception | Info  lhs.gathExcptEnv = singleEnv @lhs.index ExceptionDescr
+                                           { expFrom    = @from
+                                           , expTo      = @to
+                                           , expTarget  = @target
+                                           , expTp      = Ref @tp
+                                           , expName    = Ref @name
+                                           }
+ATTR Instructions Instruction [ excptEnv : ExceptionDescrs | | ]
+SEM BodyInfo | Info  instructions.excptEnv = @exceptions.gathExcptEnv
+
+-- Names, methods, etc.
+SEM Instruction
+  | ApplyType AsType CallInterface Coerce ConstructProp DeleteProperty GetLex
+    FindPropertyGlobalStrict FindPropertyGlobal FindProperty FindPropStrict GetDescendants
+    CallProp CallPropLex CallPropVoid CallSuper CallSuperVoid
+    GetOuterScope GetProperty GetSuper InitProperty IsType
+    SetProperty SetSuper FindDef
+      inst.nm : NmV
+      inst.nm = nameView @lhs.tbls (Ref @name)
+      nm.info = Short
+  | Debug Dxns PushString DebugFile
+      inst.nm : StrV
+      inst.nm = stringView @lhs.tbls (Ref @name)
+      nm.info = Short
+  | PushNamespace
+      inst.nms : NsV
+      inst.nms = namespaceView @lhs.tbls (Ref @name)
+      nms.info = Short
+  | CallStatic NewFunction
+      inst.m : MethodV
+      inst.m = methodView @lhs.tbls (Ref @method)
+      m.info = Short
+  | NewCatch
+      loc.edesc = lookupException (Ref @exception) @lhs.excptEnv
+
+      inst.nm : NmV
+      inst.nm = nameView @lhs.tbls (expName @loc.edesc)
+      nm.info = Short
+
+      inst.tp : NmV
+      inst.tp = nameView @lhs.tbls (expTp @loc.edesc)
+      tp.info = Short
+  | NewClass
+      loc.cdesc = lookupClass (Ref @class) @lhs.tbls
+      inst.nm : NmV
+      inst.nm = nameView @lhs.tbls (clName @loc.cdesc)
+      nm.info = Short
+  | PushInt    loc.val = lookupInt    (Ref @name) @lhs.tbls
+  | PushUInt   loc.val = lookupUInt   (Ref @name) @lhs.tbls
+  | PushDouble loc.val = lookupDouble (Ref @name) @lhs.tbls
+
+SEM Instruction
+  | Add              loc.descr = text "Add"
+  | Add_i            loc.descr = text "Add_i"
+  | Add_d            loc.descr = text "Add_d"
+  | ApplyType        loc.descr = text "Apply type"  <+> @nm.output
+  | AsType           loc.descr = text "As type"     <+> @nm.output
+  | AsTypeLate       loc.descr = text "As type (late)"
+  | Breakpoint       loc.descr = text "Breakpoint"
+  | BreakLine        loc.descr = text "Break line" <+> num @line
+  | BitAnd           loc.descr = text "BitAnd"
+  | BitNot           loc.descr = text "BitNot"
+  | BitOr            loc.descr = text "BitOr"
+  | BitXor           loc.descr = text "BitXor"
+  | Call             loc.descr = text "Call" <+> props [("args", num @argCount)]
+  | CallInterface    loc.descr = text "Call interface" <+> @nm.output <+> props [("args", num @argCount)]
+  | CallMethod       loc.descr = text "Call method" <+> props [("index", num @index), ("args", num @argCount)]
+  | CallProp         loc.descr = text "Call prop" <+> @nm.output <+> props [("args", num @argCount)]
+  | CallPropLex      loc.descr = text "Call prop (lex)" <+> @nm.output <+> props [("args", num @argCount)]
+  | CallPropVoid     loc.descr = text "Call prop (void)" <+> @nm.output <+> props [("args", num @argCount)]
+  | CallStatic       loc.descr = text "Call static" <+> props [("method", @m.output), ("args", num @argCount)]
+  | CallSuper        loc.descr = text "Call super" <+> @nm.output <+> props [("args",num  @argCount)]
+  | CallSuperId      loc.descr = text "Call super (id)"
+  | CallSuperVoid    loc.descr = text "Call super (void)" <+> @nm.output <+> props [("args",num  @argCount)]
+  | CheckFilter      loc.descr = text "CheckFilter"
+  | Coerce           loc.descr = text "Coerce" <+> @nm.output
+  | Coerce_a         loc.descr = text "Coerce_a (any type)"
+  | Coerce_b         loc.descr = text "Coerce_b"
+  | Coerce_d         loc.descr = text "Coerce_d (double)"
+  | Coerce_i         loc.descr = text "Coerce_i (signed integer)"
+  | Coerce_o         loc.descr = text "Coerce_o"
+  | Coerce_s         loc.descr = text "Coerce_s (string)"
+  | Coerce_u         loc.descr = text "Coerce_u (unsigned integer)"
+  | Concat           loc.descr = text "Concat"
+  | Construct        loc.descr = text "Construct" <+> props [("args", num @argCount)]
+  | ConstructProp    loc.descr = text "Construct prop" <+> @nm.output <+> props [("args", num @argCount)]
+  | ConstructSuper   loc.descr = text "Construct super" <+> props [("args", num @argCount)]
+  | Convert_b        loc.descr = text "Convert_b"
+  | Convert_i        loc.descr = text "Convert_i (signed integer)"
+  | Convert_d        loc.descr = text "Convert_d (double)"
+  | Convert_o        loc.descr = text "Convert_o"
+  | Convert_u        loc.descr = text "Convert_u (unsigned integer)"
+  | Convert_s        loc.descr = text "Convert_s (string)"
+  | Debug            loc.descr = text "Debug" <+> @nm.output <+> props [("reg", num @reg)]
+  | DebugFile        loc.descr = text "Debug file" <+> @nm.output
+  | DebugLine        loc.descr = text "Debug line" <+> num @line
+  | DecLocal         loc.descr = text "DecLocal (number)" <+> num @reg
+  | DecLocal_i       loc.descr = text "DecLocal_i (integer)" <+> num @reg
+  | Decrement        loc.descr = text "Decrement (number)"
+  | Decrement_i      loc.descr = text "Decrement_i (integer)"
+  | DeleteProperty   loc.descr = text "Delete property" <+> @nm.output
+  | DeletePropertyLate  loc.descr = text "Delete property (late)"
+  | Divide           loc.descr = text "Divide"
+  | Dup              loc.descr = text "Dup"
+  | Dxns             loc.descr = text "Default namespace" <+> @nm.output
+  | DxnsLate         loc.descr = text "Default namespace (late)"
+  | Equals           loc.descr = text "Equals"
+  | EscXAttr         loc.descr = text "Escape Xml Attr"
+  | EscXElem         loc.descr = text "Escape Xml Elem"
+  | FindDef          loc.descr = text "Find Definition" <+> @nm.output
+  | FindPropertyGlobalStrict  loc.descr = text "Find property global (strict)" <+> @nm.output
+  | FindPropertyGlobal  loc.descr = text "Find property global" <+> @nm.output
+  | FindProperty     loc.descr = text "Find property" <+> @nm.output
+  | FindPropStrict   loc.descr = text "Find property strict" <+> @nm.output
+  | GetDescendants   loc.descr = text "Get descendants" <+> @nm.output
+  | GetGlobalScope   loc.descr = text "Get global scope"
+  | GetGlobalSlot    loc.descr = text "Set global slot" <+> num @slot
+  | GetLex           loc.descr = text "Get lex (find+get prop)" <+> @nm.output
+  | GetLocal         loc.descr = text "Get local" <+> num @reg
+  | GetLocal0        loc.descr = text "Get local0"
+  | GetLocal1        loc.descr = text "Get local1"
+  | GetLocal2        loc.descr = text "Get local2"
+  | GetLocal3        loc.descr = text "Get local3"
+  | GetOuterScope    loc.descr = text "Get outer scope" <+> @nm.output
+  | GetProperty      loc.descr = text "Get property" <+> @nm.output
+  | GetScopeObject   loc.descr = text "Get scope object" <+> props [("index", num @index)]
+  | GetSlot          loc.descr = text "Get slot" <+> num @slot
+  | GetSuper         loc.descr = text "Get super" <+> @nm.output
+  | GreaterEquals    loc.descr = text "Greater or equals"
+  | GreaterThan      loc.descr = text "Greater than"
+  | HasNext          loc.descr = text "Has next"
+  | HasNext2         loc.descr = text "Has next 2" <+> props [("object register", num @objectReg),("index register", num @indexReg)]
+  | IfEq             loc.descr = text "If equal" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfFalse          loc.descr = text "If false" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfGe             loc.descr = text "If greater or equal" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfGt             loc.descr = text "If greater" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfLe             loc.descr = text "If less or equal" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfLt             loc.descr = text "If less than" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfNGe            loc.descr = text "If not greater or equal" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfNGt            loc.descr = text "If not greater than" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfNLe            loc.descr = text "If not less or equal" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfNLt            loc.descr = text "If not less than" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfNe             loc.descr = text "If not equal" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfStrictEq       loc.descr = text "If equal (strict)" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfStrictNe       loc.descr = text "If not equal (strict)" <+> num @loc.target <+> parens (num @loc.relative)
+  | IfTrue           loc.descr = text "If true" <+> num @loc.target <+> parens (num @loc.relative)
+  | In               loc.descr = text "In (tests existence of property in object)"
+  | IncLocal         loc.descr = text "Increment local (number)" <+> num @reg
+  | IncLocal_i       loc.descr = text "Increment local (integer)" <+> num @reg
+  | Increment        loc.descr = text "Increment (number)"
+  | Increment_i      loc.descr = text "Increment (integer)"
+  | InitProperty     loc.descr = text "Init property" <+> @nm.output
+  | InstanceOf       loc.descr = text "Instance of"
+  | IsType           loc.descr = text "Is type" <+> @nm.output
+  | IsTypeLate       loc.descr = text "Is type (late)"
+  | Jump             loc.descr = text "Jump" <+> num @loc.target <+> parens (num @loc.relative)
+  | Kill             loc.descr = text "Kill register" <+> num @reg
+  | Label            loc.descr = text "Label (nop)"
+  | LessEquals       loc.descr = text "Less or equals"
+  | LessThan         loc.descr = text "Less than"
+  | LoadFloat32      loc.descr = text "Load float 32"
+  | LoadFloat64      loc.descr = text "Load float 64"
+  | LoadIndirect8    loc.descr = text "Load indirect 8"
+  | LoadIndirect16   loc.descr = text "Load indirect 16"
+  | LoadIndirect32   loc.descr = text "Load indirect 32"
+  | LookupSwitch     loc.descr = text "Switch" <+> num @loc.target <+> parens (num @loc.relative)
+                                 $+$ @caseOffsets.output
+  | Lshift           loc.descr = text "Left shift"
+  | Modulo           loc.descr = text "Modulo"
+  | Multiply         loc.descr = text "Multiply (number)"
+  | Multiply_i       loc.descr = text "Multiply (integer)"
+  | Negate           loc.descr = text "Negate (number)"
+  | Negate_i         loc.descr = text "Negate (integer)"
+  | NewActivation    loc.descr = text "New activation"
+  | NewArray         loc.descr = text "New array" <+> props [("entries", num @argCount)]
+  | NewCatch         loc.descr = text "New catch" <+> props
+                                   [ ("from", num $ expFrom @loc.edesc), ("to", num $ expTo @loc.edesc)
+                                   , ("target", num $ expTarget @loc.edesc)
+                                   , ("type", @tp.output), ("name", @nm.output) ]
+  | NewClass         loc.descr = text "New class" <+> @nm.output
+  | NewFunction      loc.descr = text "New function" <+> @m.output
+  | NewObject        loc.descr = text "New object" <+> props [("args", num @argCount)]
+  | NextName         loc.descr = text "NextName"
+  | NextValue        loc.descr = text "NextValue"
+  | Nop              loc.descr = text "Nop"
+  | Not              loc.descr = text "Not"
+  | Pop              loc.descr = text "Pop"
+  | PopScope         loc.descr = text "Pop scope"
+  | PushByte         loc.descr = text "Push byte" <+> num @val
+  | PushDouble       loc.descr = text "Push double" <+> num @loc.val
+  | PushFalse        loc.descr = text "Push false"
+  | PushInt          loc.descr = text "Push signed integer" <+> num @loc.val
+  | PushNamespace    loc.descr = text "Push namespace" <+> @nms.output
+  | PushNaN          loc.descr = text "Push NaN"
+  | PushNull         loc.descr = text "Push null"
+  | PushScope        loc.descr = text "Push scope"
+  | PushShort        loc.descr = text "Push short" <+> num @val
+  | PushString       loc.descr = text "Push string" <+> @nm.output
+  | PushTrue         loc.descr = text "Push true"
+  | PushUInt         loc.descr = text "Push unsigned integer" <+> num @loc.val
+  | PushUndefined    loc.descr = text "Push undefined"
+  | PushWith         loc.descr = text "Push with-scope"
+  | ReturnValue      loc.descr = text "Return (value)"
+  | ReturnVoid       loc.descr = text "Return (void)"
+  | Rshift           loc.descr = text "Right shift"
+  | SetLocal         loc.descr = text "Set local" <+> num @reg
+  | SetLocal0        loc.descr = text "Set local0"
+  | SetLocal1        loc.descr = text "Set local1"
+  | SetLocal2        loc.descr = text "Set local2"
+  | SetLocal3        loc.descr = text "Set local3"
+  | SetGlobalSlot    loc.descr = text "Set global slot" <+> num @slot
+  | SetProperty      loc.descr = text "Set property" <+> @nm.output
+  | SetPropertyLate  loc.descr = text "Set property (late)"
+  | SetSlot          loc.descr = text "Set slot" <+> num @slot
+  | SetSuper         loc.descr = text "Set super" <+> @nm.output
+  | SignExtend1      loc.descr = text "Sign extend 1"
+  | SignExtend8      loc.descr = text "Sign extend 8"
+  | SignExtend16     loc.descr = text "Sign extend 16"
+  | StoreFloat32     loc.descr = text "Store float 32"
+  | StoreFloat64     loc.descr = text "Store float 64"
+  | StoreIndirect32  loc.descr = text "Store indirect 32"
+  | StoreIndirect16  loc.descr = text "Store indirect 16"
+  | StoreIndirect8   loc.descr = text "Store indirect 8"
+  | StrictEquals     loc.descr = text "Equals (strict)"
+  | Substract        loc.descr = text "Substract (number)"
+  | Substract_i      loc.descr = text "Substract (integer)"
+  | Swap             loc.descr = text "Swap"
+  | Throw            loc.descr = text "Throw"
+  | Timestamp        loc.descr = text "Timestamp"
+  | TypeOf           loc.descr = text "Type of"
+  | Urshift          loc.descr = text "Unsigned right shift"
+
+SEM CaseOffsets | Cons
+  lhs.output = text "CASE" <+> num @loc.target <+> parens (num @loc.relative)
+
+SEM BodyInfo | Info
+  instructions.mbLoc < instructions.revLocation

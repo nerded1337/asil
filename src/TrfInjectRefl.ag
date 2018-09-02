@@ -1,0 +1,57 @@
+-- Injects reflection information in the byte code
+MODULE {TrfInjectRefl} {injectReflSwf,injectReflAbc} {}
+
+INCLUDE "ByteCodeAst.ag"
+
+imports
+{
+import Data.ByteString.Lazy(ByteString,pack)
+import ByteCode
+import CFG
+import Data.Word
+import qualified Data.Set as Set
+import Data.Set(Set)
+import qualified Data.Map as Map
+import Data.Map(Map)
+import Codec.Binary.UTF8.String
+import ProgInfo
+}
+
+
+WRAPPER SwfFile
+WRAPPER AbcFile
+
+{
+injectReflSwf :: [SymbolTables] -> SwfFile -> SwfFile
+injectReflSwf tbls m = out where
+  inh = Inh_SwfFile { tbls_Inh_SwfFile = tbls }
+  sem = sem_SwfFile m
+  syn = wrap_SwfFile sem inh
+  out = output_Syn_SwfFile syn
+
+injectReflAbc :: [SymbolTables] -> AbcFile -> AbcFile
+injectReflAbc tbls m = out where
+  inh = Inh_AbcFile { tbls_Inh_AbcFile = tbls }
+  sem = sem_AbcFile m
+  syn = wrap_AbcFile sem inh
+  out = output_Syn_AbcFile syn
+}
+
+
+--
+-- Transformation of the code
+--
+
+ATTR AllSwf [ | | output : SELF ]
+
+
+--
+-- Associate a symbol table with the right abcfile in a SWF file
+--
+
+ATTR OnlySwfAbc [ | tbls : {[SymbolTables]} | ]
+ATTR AllAbc [ tbls : SymbolTables | | ]
+
+SEM AbcFile | File
+  loc.tbls = head @lhs.tbls
+  lhs.tbls = tail @lhs.tbls

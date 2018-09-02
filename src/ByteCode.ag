@@ -1,0 +1,30 @@
+MODULE {ByteCode} {} {}
+
+INCLUDE "ByteCodeAst.ag"
+
+imports
+{
+import Data.Word
+import Data.ByteString.Lazy(ByteString)
+import Data.Bits
+}
+
+DERIVING MethodFlag : Eq
+DERIVING TraitAttr : Eq
+DERIVING ValueKind : Eq
+DERIVING InstanceFlag : Eq
+
+DERIVING * : Show, Eq, Ord
+
+{
+fromS24 :: Word32 -> Int
+fromS24 w | testBit w 31 = negate (fromIntegral w)
+          | otherwise    = fromIntegral w
+}
+
+
+-- Some types for lists
+{
+type AbcFiles = [AbcFile]
+type SwfFiles = [SwfFile]
+}

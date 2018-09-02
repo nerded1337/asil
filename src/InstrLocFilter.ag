@@ -1,0 +1,94 @@
+-- Filters superfluous location instructions from the byte code
+--
+-- We keep branch targets and the location before a jump instruction
+
+MODULE {InstrLocFilter} {instrLocFilter} {}
+
+INCLUDE "ByteCodeAst.ag"
+INCLUDE "ByteCodeLocationInfo.ag"
+
+imports
+{
+import Data.ByteString.Lazy(ByteString,pack)
+import ByteCode
+import Data.Word
+import Data.Bits
+import qualified Data.IntSet as IntSet
+import Data.IntSet(IntSet)
+import Data.Monoid
+}
+
+WRAPPER BodyInfo
+
+{
+-- | Computes the minimum length of an instruction (in bytes)
+instrLocFilter :: BodyInfo -> BodyInfo
+instrLocFilter body = body' where
+  inh   = Inh_BodyInfo {}
+  sem   = sem_BodyInfo body
+  syn   = wrap_BodyInfo sem inh
+  body' = output_Syn_BodyInfo syn
+}
+
+ATTR BodyInfo Instructions Instruction CaseOffsets DebugType
+     Exceptions Exception AllTraits
+     [ | | output : SELF ]
+
+SEM BodyInfo | Info
+  instructions.isBranch    = True
+  instructions.revIsBranch = False
+
+SEM Instructions | Cons
+  lhs.output = if @hd.skip then @tl.output else @hd.output : @tl.output
+
+
+ATTR Instructions Instruction [ retain : IntSet | | ]
+SEM BodyInfo | Info
+  instructions.retain = @instructions.locs `mappend` @exceptions.locs
+
+ATTR Instruction [ | | skip : Bool ]
+
+SEM Instruction | * - Location
+  lhs.skip = False
+
+SEM Instruction | Location
+  lhs.skip = not (IntSet.member @index @lhs.retain)
+
+
+-- Is the predecessor a branching instruction (except LookupSwitch)
+ATTR Instructions Instruction [ | isBranch : Bool revIsBranch : Bool | ]
+SEM Instruction
+  | * - IfEq IfFalse IfGe IfGt IfLe IfLt IfNGe IfNGt IfNLe IfNLt IfNe IfStrictEq IfStrictNe IfTrue Jump LookupSwitch
+      lhs.isBranch    = False
+      lhs.revIsBranch = False
+  | IfEq IfFalse IfGe IfGt IfLe IfLt IfNGe IfNGt IfNLe IfNLt IfNe IfStrictEq IfStrictNe IfTrue Jump LookupSwitch
+      lhs.isBranch    = True
+      lhs.revIsBranch = True
+
+SEM Instructions | Cons  -- reverse flow
+  tl.revIsBranch  = @lhs.revIsBranch
+  hd.revIsBranch  = @tl.revIsBranch
+  lhs.revIsBranch = @hd.revIsBranch
+
+-- Compute the set of location to retain
+ATTR Exceptions Exception Instructions Instruction CaseOffsets [ | | locs USE {`mappend`} {mempty} : IntSet ]
+
+SEM Exception | Info
+  lhs.locs = IntSet.fromList $ map fromIntegral $ [@from,@to,@target]
+
+-- Location following a branch target
+SEM Instruction | Location
+  +locs = if @lhs.isBranch || @lhs.revIsBranch then (IntSet.insert @index) else id
+  
+SEM Instruction
+  | LookupSwitch IfEq IfFalse IfGe IfGt IfLe IfLt IfNGe IfNGt IfNLe IfNLt IfNe IfStrictEq IfStrictNe IfTrue Jump
+      +locs = IntSet.insert @loc.target
+
+SEM CaseOffsets | Cons
+  +locs = IntSet.insert @loc.target
+
+
+-- Slight hacks to deal with AG pecularities
+SEM BodyInfo | Info
+  instructions.isBranch < instructions.revLocation
+  instructions.isBranch < instructions.revIsBranch

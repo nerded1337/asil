@@ -1,0 +1,51 @@
+-- Computes the minimum size (in bytes) of instructions
+
+MODULE {InstrSize} {instrSize} {}
+
+INCLUDE "ByteCodeAst.ag"
+INCLUDE "PrettyInstr.ag"
+
+import
+{
+import Data.ByteString.Lazy(ByteString,pack)
+import ByteCode
+import Data.Bits
+import Data.Word
+import Codec.Binary.UTF8.String
+}
+
+WRAPPER Instruction
+
+{
+-- | Computes the minimum length of an instruction (in bytes)
+instrSize :: Instruction -> Int
+instrSize instr = size where
+  inh  = Inh_Instruction {}
+  sem  = sem_Instruction instr
+  syn  = wrap_Instruction sem inh
+  size = output_Syn_Instruction syn
+}
+
+ATTR Instruction DebugType CaseOffsets [ | | output : Int ]
+SEM CaseOffsets | Nil       lhs.output = 0
+SEM Instruction | Location  lhs.output = 0
+
+-- Give a different interpretation to the pretty-printing instructions
+{
+infixr 3 ##
+(##) :: Int -> Int -> Int
+(##) = (+)
+
+u8 :: Word8 -> Int
+u8 _ = 1
+
+s24 :: Word32 -> Int
+s24 _ = 3
+
+u30 :: Word32 -> Int
+u30 0 = 1
+u30 n = u30 (n `shiftR` 7)
+
+u30size :: Int -> Int
+u30size = u30 . fromIntegral
+}
