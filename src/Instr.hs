@@ -66,6 +66,7 @@ module Instr where
 
 import Control.Applicative
 import Control.Monad
+import qualified Control.Monad.Fail as Fail
 import Control.Monad.State.Strict
 import Data.Word
 import qualified Language as L
@@ -475,6 +476,8 @@ instance Monad Instr where
     m1 n1 $ \n2 v1 i1 ->
       let (Instr m2) = f v1
       in m2 n2 $ \n3 v2 i2 -> k n3 v2 (optSeq i1 i2)
+
+instance Fail.MonadFail Instr where
   fail s = Instr $ \n k -> k n (error s) (L.Instr_Fail (Just s))
 
 -- | Applicative instance provides sequencing.
